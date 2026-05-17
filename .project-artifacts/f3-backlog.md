@@ -20,7 +20,7 @@ Seeded from the gap between Analysis (current state) and Vision (desired end sta
 | EP-8 | Full config-knob exposure | FEATURE | P1 | L | EP-6 | ready |
 | EP-9 | Combined "Update everything" action | FEATURE | P2 | S | EP-7 | ready |
 | EP-10 | Recommendation preview-while-tuning | FEATURE | P2 | M | EP-7, EP-8 | ready |
-| EP-11 | Secrets hardening & multi-user config | SECURITY | P2 | M | — | ready |
+| EP-11 | Secrets hardening & multi-user config | SECURITY | P2 | M | — | DONE |
 | EP-12 | Test scaffolding | QA | P2 | M | — | ready |
 | EP-13 | Schema cleanup (similar_tracks drop) | TECH_DEBT | P3 | S | — | ready |
 | EP-14 | Installer packaging | INFRA | P3 | M | — | ready |
@@ -29,6 +29,7 @@ Seeded from the gap between Analysis (current state) and Vision (desired end sta
 | EP-17 | Spotify API error suppression + status indicator | FIX | P1 | S | — | DONE |
 | EP-18 | Remove recommendation preview + plain-English settings descriptions | REFINEMENT | P2 | S | EP-10 | DONE |
 | EP-19 | Replace behavioral knobs with contextual level selectors | REFINEMENT | P2 | M | EP-18 | DONE |
+| EP-20 | First-run setup screen + user-scoped config/secrets | FEATURE | P2 | M | EP-6, EP-11 | ready |
 
 Legend: **P1** must land for MVP close · **P2** important, follow-up cycle · **P3** opportunistic / on-demand · **XS/S/M/L/XL** intuitive sizing.
 
@@ -473,6 +474,35 @@ Cancellation of in-flight polls during downtime is EP-7's concern.
 **Risks / unknowns:** `std::time::Instant` is not `Send` on some older targets; use
 `tokio::time::Instant` or a simple `Arc<AtomicU64>` Unix-timestamp if cross-thread
 sharing of the snooze deadline is needed. Check in Refinement.
+
+---
+
+## EP-20 — First-run setup screen + user-scoped config/secrets
+
+**Type:** FEATURE · **Priority:** P2 · **Size:** M · **Roles:** DEV, DESIGN · **Depends on:** EP-6, EP-11
+
+On first launch (no `~/.gurdo/secrets.toml` found), show a setup screen instead of the player. The user enters their Last.fm API key, Last.fm username, and Spotify client_id. The app writes them to `~/.gurdo/secrets.toml` (chmod 600) and a default `~/.gurdo/config.toml`, then transitions to the player. Subsequent launches skip the screen. This also moves the default config/secrets location from the working directory into `~/.gurdo/`, making the binary distribution self-contained — no manual file copying required.
+
+**Scenarios:**
+- As a new user who downloaded the binary, on first launch I see a simple setup screen asking for my Last.fm API key, username, and Spotify client_id. I fill them in, click Continue, and the player opens.
+- As an existing user after this change ships, my credentials are migrated from `./secrets.toml` to `~/.gurdo/secrets.toml` automatically on first run, with no re-entry.
+- As the user, running `gurdo` from any directory finds my config at `~/.gurdo/config.toml` — I don't need a `config.toml` next to the binary.
+- As the user, the `-c <path>` flag still overrides the default location for power users.
+
+**High-level acceptance criteria:**
+- On launch, if `~/.gurdo/secrets.toml` does not exist, the setup screen is shown instead of the player.
+- The setup screen collects Last.fm API key, Last.fm username, Spotify client_id; validates they are non-empty before enabling Continue.
+- On Continue, writes `~/.gurdo/secrets.toml` (chmod 600) and `~/.gurdo/config.toml` (default values) then proceeds to the player.
+- If `~/.gurdo/secrets.toml` already exists, the setup screen is skipped.
+- `Config::load()` default path is `~/.gurdo/config.toml`; `-c <path>` overrides it.
+- `Config::secrets_path()` always resolves to `~/.gurdo/secrets.toml` (not sibling of config.toml) so secrets stay in one predictable location regardless of the `-c` flag.
+- One-time migration: if `./secrets.toml` exists next to the binary but `~/.gurdo/secrets.toml` does not, copy and inform the user.
+
+**Out of scope:** multi-account support, credential validation against the live API during setup (check happens on first sync), UI polish beyond functional (full design pass is a follow-on), password-manager / keychain integration.
+
+**Risks / unknowns:** The `~/.gurdo/` directory must exist before writing; create it with `std::fs::create_dir_all` on first run. The migration heuristic (copy from `./secrets.toml`) should be conservative — only run once and log what it did.
+
+**Known blocker — Spotify OAuth on first run:** The legacy CLI exposed a `gurdo login` subcommand that ran the Spotify PKCE OAuth flow and wrote `~/.gurdo/spotify_token.json`. EP-2 (CLI removal) deleted that subcommand; EP-7 moves login in-process via the Settings → Spotify section. This means a brand-new user who goes through the EP-20 setup screen still cannot use the app until they open Settings and click **Login** (EP-7's Spotify Login button). EP-20's setup screen should make this explicit — either by including a "Connect Spotify" step as the final setup step (triggering EP-7's OAuth flow inline), or by showing a prominent post-setup prompt directing the user to Settings → Spotify. Refinement must decide which. Without this, a new user will have credentials set but no Spotify token, and the player will show a Spotify auth error on every poll cycle.
 
 ---
 

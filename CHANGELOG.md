@@ -5,6 +5,33 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Iteration 017] — First-run setup screen + user-scoped config/secrets — 2026-05-17
+
+### Added
+- First-run setup wizard (`src/ui/setup.rs`): two-phase eframe window (440×400, not resizable) that gates app launch until credentials are present
+  - Phase 1: three labeled text fields (Last.fm API Key, Last.fm Username, Spotify Client ID); Continue disabled until all non-empty
+  - Phase 2: Spotify OAuth connect flow with inline status feedback; "Skip for now" bypasses OAuth
+- `config::needs_setup(secrets_path)` — returns `true` when `~/.gurdo/secrets.toml` is absent, unparseable, or contains any empty/whitespace credential
+- `config::gurdo_dir()` — returns `~/.gurdo/` via `dirs::home_dir()`
+- `config::migrate_secrets_if_needed(gurdo_dir, cwd)` — one-time migration of `./secrets.toml` → `~/.gurdo/secrets.toml` for existing installations (copy-only, no-op if destination present)
+- `README.md` — documents `~/.gurdo/` config and secrets paths, setup wizard flow
+- `dirs = "5"` dependency for cross-platform home directory resolution
+
+### Changed
+- `Config::secrets_path()` — now always returns `~/.gurdo/secrets.toml` regardless of config path argument (invariant hardened)
+- `Config::load()` refactored to `load_inner()` + `#[cfg(test)] load_with_secrets_at()` seam for test isolation
+- `parse_config_arg()` default path changed from `./config.toml` to `~/.gurdo/config.toml`
+- `src/main.rs` — runs `create_dir_all`, migration, and `needs_setup` check before loading config; setup wizard blocks player if credentials absent
+- `config.toml.example` — header updated to reference `~/.gurdo/config.toml` as default
+
+### Security
+- `~/.gurdo/secrets.toml` receives `chmod 0o600` immediately after write (`#[cfg(unix)]`)
+- No credential values (api_key, username, client_id, tokens) emitted in any `tracing::*` / `eprintln!` / `dbg!` call
+
+Retro: iterations/017-first-run-setup-screen/i7-retro.md
+
+---
+
 ## [Iteration 016] — Installer packaging — 2026-05-15
 
 ### Added

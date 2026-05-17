@@ -4,7 +4,7 @@ mode: improve
 status: COMPLETE
 current_epic:
 current_phase: Idle
-iteration: 17
+iteration: 18
 Foundation phases: Analysis | Vision | Architecture | Backlog | Environment
 
 ## Completed phases
@@ -15,7 +15,7 @@ Foundation phases: Analysis | Vision | Architecture | Backlog | Environment
 - Environment ✓ → .devcontainer/ (Dockerfile, devcontainer.json, .claude/settings.json)
 
 ## Current iteration
-Idle
+None — backlog exhausted. Pipeline complete.
 
 ## Backlog
 
@@ -40,6 +40,7 @@ Idle
 | EP-17 | Spotify API error suppression + status indicator | FIX | P1 | DONE |
 | EP-18 | Remove recommendation preview + plain-English settings descriptions | REFINEMENT | P2 | DONE |
 | EP-19 | Replace behavioral knobs with contextual level selectors | REFINEMENT | P2 | DONE |
+| EP-20 | First-run setup screen + user-scoped config/secrets | FEATURE | P2 | DONE |
 
 ## Completed iterations
 
@@ -61,6 +62,7 @@ Idle
 | 014 | Schema cleanup (similar_tracks drop) | DONE | 2026-05-15 | warnings 53→47; migration in existing DROP TABLE batch | iterations/014-schema-cleanup-similar-tracks-drop/i7-retro.md |
 | 015 | Dead-code cleanup (orphaned API surface) | DONE | 2026-05-15 | warnings 47→1; field mbid confusion — grep callers before removing fields | iterations/015-dead-code-cleanup/i7-retro.md |
 | 016 | Installer packaging | DONE | 2026-05-15 | set -euo pipefail gives build-failure AC for free; tar -C for flat archive layout | iterations/016-installer-packaging/i7-retro.md |
+| 017 | First-run setup screen + user-scoped config/secrets | DONE | 2026-05-17 | load_with_secrets_at seam for test isolation; OAuth uses ~/.gurdo/config.toml directly | iterations/017-first-run-setup-screen/i7-retro.md |
 
 ## History
 - 2026-05-11 — pipeline initialised in improve mode.
