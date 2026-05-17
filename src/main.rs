@@ -38,6 +38,8 @@ fn main() -> Result<()> {
         ui::setup::run(&config_path)?;
     }
 
+    ui::setup::write_default_config_if_absent(&config_path)?;
+
     let config = config::Config::load(&config_path)?;
     std::fs::create_dir_all(config.data_dir())?;
     ui::run(config, config_path)
