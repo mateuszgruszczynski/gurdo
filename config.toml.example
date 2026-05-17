@@ -1,0 +1,58 @@
+# Gurdo configuration example — copy to config.toml and fill in your values.
+#
+# Sensitive values (api_key, username, client_id) can be kept in a separate
+# secrets.toml alongside this file so config.toml is safe to commit.
+# Example secrets.toml:
+#
+#   [lastfm]
+#   api_key  = "your-lastfm-api-key"
+#   username = "your-lastfm-username"
+#
+#   [spotify]
+#   client_id = "your-spotify-client-id"
+
+[lastfm]
+api_key  = "YOUR_LASTFM_API_KEY"
+username = "YOUR_LASTFM_USERNAME"
+
+[spotify]
+client_id    = "YOUR_SPOTIFY_CLIENT_ID"
+redirect_uri = "https://127.0.0.1:8888/callback"
+callback_port = 8888
+
+[app]
+# Directory where the local database and output files will be stored
+data_dir = "~/.gurdo"
+
+[sync]
+# How many top artists/tracks to seed from per period
+seed_artists_limit = 50
+seed_tracks_limit  = 50
+# How many loved tracks to fetch (paginated, max 200 per page)
+loved_tracks_limit = 500
+
+[artist_scoring]
+# base_score = total_playcount ^ score_exponent
+# log10(2) ≈ 0.301 means 1000 plays scores 2× more than 100 plays
+score_exponent = 0.301
+# Per-year bonus: final_score = base_score × (1 + year_bonus_pct/100) ^ years_active
+year_bonus_pct = 5.0
+# Artists with total all-time playcount >= this value are included in the scoring pool
+min_playcount_threshold = 40
+
+[engine]
+# How many similar artists to fetch per seed artist
+similar_artists_limit    = 20
+# How many top tracks to fetch per similar artist
+artist_top_tracks_limit  = 10
+# How many tracks to pull per tag
+tag_top_tracks_limit     = 30
+# Final recommendation pool size
+recommendation_pool_size = 500
+# Max tracks from any single seed artist in the final pool (diversity cap)
+max_tracks_per_seed      = 20
+
+[recommendations]
+count                  = 50
+artist_score_exponent  = 1.0
+track_rank_exponent    = 1.0

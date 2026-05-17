@@ -1,0 +1,5 @@
+/target
+/dist
+secrets.toml
+/config.toml
+/.claude/worktrees/
