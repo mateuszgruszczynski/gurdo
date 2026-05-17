@@ -40,9 +40,7 @@ enum SetupOutcome { InProgress, Complete, CancelledPhase1, CancelledOAuth }
 struct SetupApp {
     config_path: PathBuf,
     phase: Phase,
-    api_key: String,
     username: String,
-    client_id: String,
     write_error: Option<String>,
     oauth_status: OAuthStatus,
     oauth_result: Arc<Mutex<Option<std::result::Result<(), String>>>>,
@@ -93,19 +91,11 @@ impl SetupApp {
     fn show_fields(&mut self, ui: &mut egui::Ui) {
         ui.heading("Welcome to Gurdo");
         ui.add_space(8.0);
-        ui.label("Enter your credentials to get started.");
+        ui.label("Enter your Last.fm username to get started.");
         ui.add_space(16.0);
-
-        ui.label("Last.fm API Key");
-        ui.add(egui::TextEdit::singleline(&mut self.api_key).desired_width(f32::INFINITY));
-        ui.add_space(8.0);
 
         ui.label("Last.fm Username");
         ui.add(egui::TextEdit::singleline(&mut self.username).desired_width(f32::INFINITY));
-        ui.add_space(8.0);
-
-        ui.label("Spotify Client ID");
-        ui.add(egui::TextEdit::singleline(&mut self.client_id).desired_width(f32::INFINITY));
         ui.add_space(12.0);
 
         if let Some(ref err) = self.write_error {
@@ -113,14 +103,12 @@ impl SetupApp {
             ui.add_space(8.0);
         }
 
-        let all_filled = !self.api_key.trim().is_empty()
-            && !self.username.trim().is_empty()
-            && !self.client_id.trim().is_empty();
+        let all_filled = !self.username.trim().is_empty();
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_enabled_ui(all_filled, |ui| {
                 if ui.button("Continue").clicked() {
-                    match write_credentials(&self.config_path, &self.api_key, &self.username, &self.client_id) {
+                    match write_credentials(&self.config_path, &self.username) {
                         Ok(()) => { self.write_error = None; self.phase = Phase::OAuth; }
                         Err(e) => { self.write_error = Some(e.to_string()); }
                     }
@@ -137,11 +125,18 @@ impl SetupApp {
         let (status_text, color) = match &self.oauth_status {
             OAuthStatus::Idle      => ("Connect your Spotify account to enable playback.".to_owned(), egui::Color32::GRAY),
             OAuthStatus::Pending   => ("Waiting for Spotify authorisation\u{2026}".to_owned(), egui::Color32::GRAY),
-            OAuthStatus::Failed(e) => (format!("OAuth failed: {}", e), egui::Color32::RED),
+            OAuthStatus::Failed(e) => (format!("Error: {}", e), egui::Color32::RED),
             OAuthStatus::Success   => ("Connected!".to_owned(), egui::Color32::GREEN),
         };
         ui.colored_label(color, &status_text);
-        ui.add_space(20.0);
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(
+                "If your browser shows a certificate warning for 127.0.0.1,\n\
+                 click \u{201c}Advanced\u{201d} \u{2192} \u{201c}Proceed to 127.0.0.1\u{201d} to continue."
+            ).weak().small()
+        );
+        ui.add_space(12.0);
 
         let is_pending = self.oauth_status == OAuthStatus::Pending;
         let connect_label = if matches!(self.oauth_status, OAuthStatus::Failed(_)) { "Retry" } else { "Connect Spotify" };
@@ -193,17 +188,14 @@ impl SetupApp {
 // ── file helpers (pub(crate) for unit tests) ──────────────────────────────────
 
 #[derive(Serialize)]
-struct SecretsOut { lastfm: SecretsLastfmOut, spotify: SecretsSpotifyOut }
+struct SecretsOut { lastfm: SecretsLastfmOut }
 #[derive(Serialize)]
-struct SecretsLastfmOut  { api_key: String, username: String }
-#[derive(Serialize)]
-struct SecretsSpotifyOut { client_id: String }
+struct SecretsLastfmOut { username: String }
 
-/// Write trimmed credential values to `path` and apply `0o600` permissions on Unix.
-pub(crate) fn write_secrets(path: &Path, api_key: &str, username: &str, client_id: &str) -> Result<()> {
+/// Write trimmed Last.fm username to `path` and apply `0o600` permissions on Unix.
+pub(crate) fn write_secrets(path: &Path, username: &str) -> Result<()> {
     let content = toml::to_string(&SecretsOut {
-        lastfm:  SecretsLastfmOut  { api_key: api_key.trim().to_owned(), username: username.trim().to_owned() },
-        spotify: SecretsSpotifyOut { client_id: client_id.trim().to_owned() },
+        lastfm: SecretsLastfmOut { username: username.trim().to_owned() },
     }).context("Failed to serialize secrets")?;
 
     std::fs::write(path, content)
@@ -227,10 +219,10 @@ pub(crate) fn write_default_config_if_absent(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_credentials(config_path: &Path, api_key: &str, username: &str, client_id: &str) -> Result<()> {
+fn write_credentials(config_path: &Path, username: &str) -> Result<()> {
     let gurdo_dir = crate::config::gurdo_dir()
         .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    write_secrets(&gurdo_dir.join("secrets.toml"), api_key, username, client_id)?;
+    write_secrets(&gurdo_dir.join("secrets.toml"), username)?;
     let default_cfg = gurdo_dir.join("config.toml");
     let cfg_target = if config_path.ends_with(".gurdo/config.toml") { config_path } else { &default_cfg };
     write_default_config_if_absent(cfg_target)?;
@@ -260,9 +252,7 @@ pub fn run(config_path: &Path) -> Result<()> {
             Ok(Box::new(SetupApp {
                 config_path: config_path.to_path_buf(),
                 phase: Phase::Fields,
-                api_key: String::new(),
                 username: String::new(),
-                client_id: String::new(),
                 write_error: None,
                 oauth_status: OAuthStatus::Idle,
                 oauth_result: Arc::new(Mutex::new(None)),
@@ -293,13 +283,11 @@ mod tests {
     fn write_secrets_trims_and_produces_valid_toml() {
         let dir  = tempdir().unwrap();
         let path = dir.path().join("secrets.toml");
-        write_secrets(&path, "  my_api_key  ", "  my_user  ", "  my_client  ").unwrap();
+        write_secrets(&path, "  my_user  ").unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         let val: toml::Value = toml::from_str(&content).expect("valid TOML");
-        assert_eq!(val["lastfm"]["api_key"].as_str().unwrap(),   "my_api_key");
-        assert_eq!(val["lastfm"]["username"].as_str().unwrap(),  "my_user");
-        assert_eq!(val["spotify"]["client_id"].as_str().unwrap(), "my_client");
+        assert_eq!(val["lastfm"]["username"].as_str().unwrap(), "my_user");
     }
 
     #[cfg(unix)]
@@ -308,7 +296,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir  = tempdir().unwrap();
         let path = dir.path().join("secrets.toml");
-        write_secrets(&path, "k", "u", "c").unwrap();
+        write_secrets(&path, "u").unwrap();
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "expected 0o600, got {:o}", mode & 0o777);
     }
@@ -320,7 +308,7 @@ mod tests {
         write_default_config_if_absent(&path).unwrap();
         assert!(path.exists());
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("[lastfm]"));
+        assert!(content.contains("[app]"));
     }
 
     #[test]

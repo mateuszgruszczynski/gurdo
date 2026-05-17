@@ -56,19 +56,19 @@ async fn run_operation(
     match kind {
         OperationKind::SyncLastfm => {
             let conn = db::open(&config.db_path())?;
-            let client = LastfmClient::new(config.lastfm.api_key.clone());
+            let client = LastfmClient::new();
             sync::sync_lastfm(&conn, &client, config, progress).await?;
             Ok("Last.fm sync complete".to_string())
         }
         OperationKind::Expand => {
             let conn = db::open(&config.db_path())?;
-            let client = LastfmClient::new(config.lastfm.api_key.clone());
+            let client = LastfmClient::new();
             sync::expand_artists(&conn, &client, config, progress).await?;
             Ok("Similar artists expanded".to_string())
         }
         OperationKind::FetchTracks => {
             let conn = db::open(&config.db_path())?;
-            let client = LastfmClient::new(config.lastfm.api_key.clone());
+            let client = LastfmClient::new();
             sync::fetch_artist_tracks(&conn, &client, None, config, progress).await?;
             Ok("Top tracks fetched".to_string())
         }

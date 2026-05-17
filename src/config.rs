@@ -7,20 +7,12 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Default, Deserialize)]
 struct SecretsConfig {
     #[serde(default)]
-    lastfm:  SecretsLastfm,
-    #[serde(default)]
-    spotify: SecretsSpotify,
+    lastfm: SecretsLastfm,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct SecretsLastfm {
-    api_key:  Option<String>,
     username: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct SecretsSpotify {
-    client_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -43,15 +35,11 @@ pub struct Config {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct LastfmConfig {
     #[serde(default)]
-    pub api_key: String,
-    #[serde(default)]
     pub username: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SpotifyConfig {
-    #[serde(default)]
-    pub client_id: String,
     #[serde(default = "default_redirect_uri")]
     pub redirect_uri: String,
     #[serde(default = "default_callback_port")]
@@ -61,7 +49,6 @@ pub struct SpotifyConfig {
 impl Default for SpotifyConfig {
     fn default() -> Self {
         Self {
-            client_id: String::new(),
             redirect_uri: default_redirect_uri(),
             callback_port: default_callback_port(),
         }
@@ -271,9 +258,7 @@ impl Config {
             .with_context(|| format!("Invalid config file: {}", config_path.display()))?;
         if secrets_path.exists() {
             let sc = Self::load_secrets(secrets_path)?;
-            if let Some(k) = sc.lastfm.api_key    { config.lastfm.api_key    = k; }
-            if let Some(u) = sc.lastfm.username   { config.lastfm.username   = u; }
-            if let Some(c) = sc.spotify.client_id { config.spotify.client_id = c; }
+            if let Some(u) = sc.lastfm.username { config.lastfm.username = u; }
         }
         Ok(config)
     }
@@ -349,7 +334,7 @@ pub fn gurdo_dir() -> Option<PathBuf> {
 /// Returns `true` when the user needs to complete first-run setup.
 ///
 /// Setup is required when `secrets_path` is absent, unparseable, or missing
-/// any of `api_key`, `username`, or `client_id` after trim.
+/// `api_key` or `username` after trim.
 pub fn needs_setup(secrets_path: &Path) -> bool {
     let content = match std::fs::read_to_string(secrets_path) {
         Ok(c) => c,
@@ -359,28 +344,10 @@ pub fn needs_setup(secrets_path: &Path) -> bool {
         Ok(c) => c,
         Err(_) => return true,
     };
-    let key_ok    = sc.lastfm.api_key.as_deref().map(str::trim).unwrap_or("").len() > 0;
-    let user_ok   = sc.lastfm.username.as_deref().map(str::trim).unwrap_or("").len() > 0;
-    let client_ok = sc.spotify.client_id.as_deref().map(str::trim).unwrap_or("").len() > 0;
-    !(key_ok && user_ok && client_ok)
+    let user_ok = sc.lastfm.username.as_deref().map(str::trim).unwrap_or("").len() > 0;
+    !user_ok
 }
 
-/// Copies `<cwd>/secrets.toml` → `<gurdo_dir>/secrets.toml` when the
-/// destination is absent and the source exists (one-time migration).
-pub fn migrate_secrets_if_needed(gurdo_dir: &Path, cwd: &Path) -> anyhow::Result<()> {
-    let dest = gurdo_dir.join("secrets.toml");
-    if dest.exists() {
-        return Ok(());
-    }
-    let src = cwd.join("secrets.toml");
-    if !src.exists() {
-        return Ok(());
-    }
-    std::fs::copy(&src, &dest)
-        .with_context(|| format!("Failed to migrate secrets from {} to {}", src.display(), dest.display()))?;
-    tracing::info!("Migrated secrets.toml to ~/.gurdo/secrets.toml");
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -390,11 +357,9 @@ mod tests {
     fn minimal_config_toml() -> String {
         r#"
 [lastfm]
-api_key  = "PLACEHOLDER_KEY"
 username = "PLACEHOLDER_USER"
 
 [spotify]
-client_id    = "PLACEHOLDER_CLIENT"
 redirect_uri = "https://127.0.0.1:8888/callback"
 callback_port = 8888
 
@@ -436,19 +401,10 @@ max_tracks_per_seed      = 20
         let sec_path = dir.path().join("secrets.toml");
 
         fs::write(&cfg_path, minimal_config_toml()).unwrap();
-        fs::write(&sec_path, r#"
-[lastfm]
-api_key  = "real_api_key"
-username = "real_user"
-
-[spotify]
-client_id = "real_client_id"
-"#).unwrap();
+        fs::write(&sec_path, "[lastfm]\nusername = \"real_user\"\n").unwrap();
 
         let config = Config::load_with_secrets_at(&cfg_path, &sec_path).unwrap();
-        assert_eq!(config.lastfm.api_key,    "real_api_key");
-        assert_eq!(config.lastfm.username,   "real_user");
-        assert_eq!(config.spotify.client_id, "real_client_id");
+        assert_eq!(config.lastfm.username, "real_user");
     }
 
     #[test]
@@ -459,12 +415,10 @@ client_id = "real_client_id"
 
         fs::write(&cfg_path, r#"
 [lastfm]
-api_key  = "direct_key"
 username = "direct_user"
 
 [spotify]
-client_id    = "direct_client"
-redirect_uri = "https://127.0.0.1:8888/callback"
+redirect_uri  = "http://127.0.0.1:8888/callback"
 callback_port = 8888
 
 [app]
@@ -489,9 +443,7 @@ max_tracks_per_seed      = 20
 "#).unwrap();
 
         let config = Config::load_with_secrets_at(&cfg_path, &no_secrets).unwrap();
-        assert_eq!(config.lastfm.api_key,    "direct_key");
-        assert_eq!(config.lastfm.username,   "direct_user");
-        assert_eq!(config.spotify.client_id, "direct_client");
+        assert_eq!(config.lastfm.username, "direct_user");
     }
 
     // ── needs_setup ────────────────────────────────────────────────────────────
@@ -505,31 +457,15 @@ max_tracks_per_seed      = 20
     fn needs_setup_false_when_all_keys_present() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("secrets.toml");
-        fs::write(&p, "[lastfm]\napi_key = \"k\"\nusername = \"u\"\n[spotify]\nclient_id = \"c\"\n").unwrap();
+        fs::write(&p, "[lastfm]\nusername = \"u\"\n").unwrap();
         assert!(!needs_setup(&p));
-    }
-
-    #[test]
-    fn needs_setup_true_when_api_key_whitespace() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("secrets.toml");
-        fs::write(&p, "[lastfm]\napi_key = \"   \"\nusername = \"u\"\n[spotify]\nclient_id = \"c\"\n").unwrap();
-        assert!(needs_setup(&p));
     }
 
     #[test]
     fn needs_setup_true_when_username_empty() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("secrets.toml");
-        fs::write(&p, "[lastfm]\napi_key = \"k\"\nusername = \"\"\n[spotify]\nclient_id = \"c\"\n").unwrap();
-        assert!(needs_setup(&p));
-    }
-
-    #[test]
-    fn needs_setup_true_when_client_id_absent() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("secrets.toml");
-        fs::write(&p, "[lastfm]\napi_key = \"k\"\nusername = \"u\"\n[spotify]\n").unwrap();
+        fs::write(&p, "[lastfm]\nusername = \"\"\n").unwrap();
         assert!(needs_setup(&p));
     }
 
@@ -541,51 +477,4 @@ max_tracks_per_seed      = 20
         assert!(needs_setup(&p));
     }
 
-    // ── migrate_secrets_if_needed ───────────────────────────────────────────────
-
-    #[test]
-    fn migrate_copies_when_only_source_exists() {
-        let cwd_dir   = tempfile::tempdir().unwrap();
-        let gurdo_dir = tempfile::tempdir().unwrap();
-        fs::write(cwd_dir.path().join("secrets.toml"), "api_key = \"abc\"").unwrap();
-
-        migrate_secrets_if_needed(gurdo_dir.path(), cwd_dir.path()).unwrap();
-
-        let dest = gurdo_dir.path().join("secrets.toml");
-        assert!(dest.exists());
-        assert_eq!(fs::read_to_string(&dest).unwrap(), "api_key = \"abc\"");
-    }
-
-    #[test]
-    fn migrate_noop_when_both_absent() {
-        let cwd_dir   = tempfile::tempdir().unwrap();
-        let gurdo_dir = tempfile::tempdir().unwrap();
-        migrate_secrets_if_needed(gurdo_dir.path(), cwd_dir.path()).unwrap();
-        assert!(!gurdo_dir.path().join("secrets.toml").exists());
-    }
-
-    #[test]
-    fn migrate_noop_when_dest_exists() {
-        let cwd_dir   = tempfile::tempdir().unwrap();
-        let gurdo_dir = tempfile::tempdir().unwrap();
-        fs::write(cwd_dir.path().join("secrets.toml"),   "api_key = \"old\"").unwrap();
-        fs::write(gurdo_dir.path().join("secrets.toml"), "api_key = \"existing\"").unwrap();
-
-        migrate_secrets_if_needed(gurdo_dir.path(), cwd_dir.path()).unwrap();
-
-        let content = fs::read_to_string(gurdo_dir.path().join("secrets.toml")).unwrap();
-        assert_eq!(content, "api_key = \"existing\"");
-    }
-
-    #[test]
-    fn migrate_noop_when_only_dest_exists() {
-        let cwd_dir   = tempfile::tempdir().unwrap();
-        let gurdo_dir = tempfile::tempdir().unwrap();
-        fs::write(gurdo_dir.path().join("secrets.toml"), "api_key = \"present\"").unwrap();
-
-        migrate_secrets_if_needed(gurdo_dir.path(), cwd_dir.path()).unwrap();
-
-        let content = fs::read_to_string(gurdo_dir.path().join("secrets.toml")).unwrap();
-        assert_eq!(content, "api_key = \"present\"");
-    }
 }

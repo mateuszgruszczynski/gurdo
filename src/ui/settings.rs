@@ -260,11 +260,6 @@ pub(super) fn render(
                 read_only_row(ui, "Config file",       &config_path.display().to_string());
                 read_only_row(ui, "Token file",        &cfg.token_path().display().to_string());
                 read_only_row(ui, "Last.fm username",  &cfg.lastfm.username);
-                let client_id_display = {
-                    let id = &cfg.spotify.client_id;
-                    if id.len() > 8 { format!("{}…", &id[..8]) } else { id.clone() }
-                };
-                read_only_row(ui, "Spotify client ID", &client_id_display);
             }
 
             ui.add_space(8.0);

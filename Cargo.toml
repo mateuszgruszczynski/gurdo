@@ -34,7 +34,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# HTTPS callback server (OAuth)
+# TLS — reqwest backend + HTTPS OAuth callback server
 rcgen = "0.13"
 rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.26"

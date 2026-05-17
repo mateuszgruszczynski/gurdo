@@ -7,27 +7,24 @@ use tracing::debug;
 use super::models::*;
 
 const BASE_URL: &str = "https://ws.audioscrobbler.com/2.0/";
+const API_KEY: &str = "69ba8903cd1e8f90720fa9b7a7f73ef4";
 // Last.fm allows ~5 req/s; we stay conservative at 4 req/s
 const REQUEST_DELAY_MS: u64 = 250;
 
 pub struct LastfmClient {
     client: Client,
-    api_key: String,
 }
 
 impl LastfmClient {
-    pub fn new(api_key: String) -> Self {
-        Self {
-            client: Client::new(),
-            api_key,
-        }
+    pub fn new() -> Self {
+        Self { client: Client::new() }
     }
 
     async fn get<T: DeserializeOwned>(&self, params: &[(&str, &str)]) -> Result<T> {
         sleep(Duration::from_millis(REQUEST_DELAY_MS)).await;
 
         let mut query: Vec<(&str, &str)> = vec![
-            ("api_key", &self.api_key),
+            ("api_key", API_KEY),
             ("format", "json"),
         ];
         query.extend_from_slice(params);

@@ -28,9 +28,6 @@ fn main() -> Result<()> {
     std::fs::create_dir_all(&gurdo_dir)
         .with_context(|| "Cannot create config directory ~/.gurdo/")?;
 
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    config::migrate_secrets_if_needed(&gurdo_dir, &cwd)?;
-
     let config_path = parse_config_arg();
 
     let secrets_path = config::Config::secrets_path(&config_path);
