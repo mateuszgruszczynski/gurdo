@@ -7,16 +7,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const DEFAULT_CONFIG_TOML: &str = r#"[lastfm]
-api_key  = "YOUR_LASTFM_API_KEY"
-username = "YOUR_LASTFM_USERNAME"
-
-[spotify]
-client_id    = "YOUR_SPOTIFY_CLIENT_ID"
-redirect_uri = "https://127.0.0.1:8888/callback"
-callback_port = 8888
-
-[app]
+const DEFAULT_CONFIG_TOML: &str = r#"[app]
 data_dir = "~/.gurdo"
 
 [sync]

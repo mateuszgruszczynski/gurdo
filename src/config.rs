@@ -25,7 +25,9 @@ struct SecretsSpotify {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
+    #[serde(default)]
     pub lastfm: LastfmConfig,
+    #[serde(default)]
     pub spotify: SpotifyConfig,
     pub app: AppConfig,
     pub sync: SyncConfig,
@@ -38,19 +40,32 @@ pub struct Config {
     pub ui: UiConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct LastfmConfig {
+    #[serde(default)]
     pub api_key: String,
+    #[serde(default)]
     pub username: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SpotifyConfig {
+    #[serde(default)]
     pub client_id: String,
     #[serde(default = "default_redirect_uri")]
     pub redirect_uri: String,
     #[serde(default = "default_callback_port")]
     pub callback_port: u16,
+}
+
+impl Default for SpotifyConfig {
+    fn default() -> Self {
+        Self {
+            client_id: String::new(),
+            redirect_uri: default_redirect_uri(),
+            callback_port: default_callback_port(),
+        }
+    }
 }
 
 fn default_redirect_uri() -> String {

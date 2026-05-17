@@ -23,7 +23,9 @@ fn set_background_error(state: &Arc<Mutex<PlayerState>>, msg: String) {
 
 async fn do_poll(state: &Arc<Mutex<PlayerState>>, config: &Config, http: &reqwest::Client) {
     let result: anyhow::Result<()> = async {
-        let token = spotify::auth::load_or_refresh_token(config).await?;
+        let Some(token) = spotify::auth::load_or_refresh_token(config).await? else {
+            return Ok(());
+        };
         let client = spotify::SpotifyClient::new(token);
 
         match client.get_currently_playing().await? {
@@ -238,7 +240,9 @@ async fn extend_queue_if_needed(
     if !is_playing { return; }
 
     let result: anyhow::Result<()> = async {
-        let token = spotify::auth::load_or_refresh_token(config).await?;
+        let Some(token) = spotify::auth::load_or_refresh_token(config).await? else {
+            return Ok(());
+        };
         let client = spotify::SpotifyClient::new(token);
 
         if let Some(uri) = state.lock().unwrap().track_uri.clone() {
@@ -359,7 +363,10 @@ pub(super) async fn polling_loop(
                 let config = shared_config.lock().unwrap().clone();
                 match spotify::auth::load_or_refresh_token(&config).await {
                     Err(e) => state.lock().unwrap().error = Some(format!("Token error: {}", e)),
-                    Ok(token) => {
+                    Ok(None) => state.lock().unwrap().error = Some(
+                        "Spotify not connected — complete setup to enable playback".to_string()
+                    ),
+                    Ok(Some(token)) => {
                         let client = spotify::SpotifyClient::new(token);
                         if let Some(delay_ms) = handle_cmd(cmd, &state, &config, &client, &mut our_uris).await {
                             tokio::time::sleep(Duration::from_millis(delay_ms)).await;

@@ -362,22 +362,27 @@ fn save_token(config: &Config, token: &StoredToken) -> Result<()> {
     Ok(())
 }
 
-fn load_token(config: &Config) -> Result<StoredToken> {
+fn load_token(config: &Config) -> Result<Option<StoredToken>> {
     let path = config.token_path();
+    if !path.exists() {
+        return Ok(None);
+    }
     let json = std::fs::read_to_string(&path)
-        .with_context(|| format!("No token found at {} — run `gurdo login` first", path.display()))?;
-    Ok(serde_json::from_str(&json)?)
+        .with_context(|| format!("Cannot read token file: {}", path.display()))?;
+    Ok(Some(serde_json::from_str(&json)?))
 }
 
-pub async fn load_or_refresh_token(config: &Config) -> Result<String> {
-    let token = load_token(config)?;
+pub async fn load_or_refresh_token(config: &Config) -> Result<Option<String>> {
+    let Some(token) = load_token(config)? else {
+        return Ok(None);
+    };
 
     if Utc::now().timestamp() < token.expires_at {
-        return Ok(token.access_token);
+        return Ok(Some(token.access_token));
     }
 
     info!("Access token expired, refreshing...");
     let refreshed = refresh_access_token(&config.spotify.client_id, &token.refresh_token).await?;
     save_token(config, &refreshed)?;
-    Ok(refreshed.access_token)
+    Ok(Some(refreshed.access_token))
 }
