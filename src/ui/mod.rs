@@ -6,6 +6,7 @@ mod player;
 mod poll;
 mod settings;
 mod state;
+pub mod setup;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

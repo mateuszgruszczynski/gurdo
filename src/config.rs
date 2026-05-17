@@ -246,13 +246,16 @@ impl Config {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("Cannot read config file: {}", path.display()))?;
+        Self::load_inner(path, &Self::secrets_path(path))
+    }
+
+    fn load_inner(config_path: &Path, secrets_path: &Path) -> Result<Self> {
+        let content = std::fs::read_to_string(config_path)
+            .with_context(|| format!("Cannot read config file: {}", config_path.display()))?;
         let mut config: Config = toml::from_str(&content)
-            .with_context(|| format!("Invalid config file: {}", path.display()))?;
-        let secrets_path = Self::secrets_path(path);
+            .with_context(|| format!("Invalid config file: {}", config_path.display()))?;
         if secrets_path.exists() {
-            let sc = Self::load_secrets(&secrets_path)?;
+            let sc = Self::load_secrets(secrets_path)?;
             if let Some(k) = sc.lastfm.api_key    { config.lastfm.api_key    = k; }
             if let Some(u) = sc.lastfm.username   { config.lastfm.username   = u; }
             if let Some(c) = sc.spotify.client_id { config.spotify.client_id = c; }
@@ -260,8 +263,17 @@ impl Config {
         Ok(config)
     }
 
-    pub fn secrets_path(config_path: &Path) -> PathBuf {
-        config_path.with_file_name("secrets.toml")
+    /// Test-only: load config with an explicitly specified secrets path.
+    #[cfg(test)]
+    pub(crate) fn load_with_secrets_at(config_path: &Path, secrets_path: &Path) -> Result<Self> {
+        Self::load_inner(config_path, secrets_path)
+    }
+
+    /// Always returns `~/.gurdo/secrets.toml` regardless of `config_path`.
+    pub fn secrets_path(_config_path: &Path) -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".gurdo/secrets.toml")
     }
 
     fn load_secrets(path: &Path) -> Result<SecretsConfig> {
@@ -310,7 +322,49 @@ impl Config {
 }
 
 fn dirs_home() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(PathBuf::from)
+    dirs::home_dir()
+}
+
+/// Returns the canonical `~/.gurdo/` directory path, or `None` if the home
+/// directory cannot be determined.
+pub fn gurdo_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".gurdo"))
+}
+
+/// Returns `true` when the user needs to complete first-run setup.
+///
+/// Setup is required when `secrets_path` is absent, unparseable, or missing
+/// any of `api_key`, `username`, or `client_id` after trim.
+pub fn needs_setup(secrets_path: &Path) -> bool {
+    let content = match std::fs::read_to_string(secrets_path) {
+        Ok(c) => c,
+        Err(_) => return true,
+    };
+    let sc: SecretsConfig = match toml::from_str(&content) {
+        Ok(c) => c,
+        Err(_) => return true,
+    };
+    let key_ok    = sc.lastfm.api_key.as_deref().map(str::trim).unwrap_or("").len() > 0;
+    let user_ok   = sc.lastfm.username.as_deref().map(str::trim).unwrap_or("").len() > 0;
+    let client_ok = sc.spotify.client_id.as_deref().map(str::trim).unwrap_or("").len() > 0;
+    !(key_ok && user_ok && client_ok)
+}
+
+/// Copies `<cwd>/secrets.toml` → `<gurdo_dir>/secrets.toml` when the
+/// destination is absent and the source exists (one-time migration).
+pub fn migrate_secrets_if_needed(gurdo_dir: &Path, cwd: &Path) -> anyhow::Result<()> {
+    let dest = gurdo_dir.join("secrets.toml");
+    if dest.exists() {
+        return Ok(());
+    }
+    let src = cwd.join("secrets.toml");
+    if !src.exists() {
+        return Ok(());
+    }
+    std::fs::copy(&src, &dest)
+        .with_context(|| format!("Failed to migrate secrets from {} to {}", src.display(), dest.display()))?;
+    tracing::info!("Migrated secrets.toml to ~/.gurdo/secrets.toml");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -352,10 +406,12 @@ max_tracks_per_seed      = 20
     }
 
     #[test]
-    fn secrets_path_is_sibling() {
-        let cfg  = PathBuf::from("/some/dir/config.toml");
-        let want = PathBuf::from("/some/dir/secrets.toml");
-        assert_eq!(Config::secrets_path(&cfg), want);
+    fn secrets_path_always_returns_gurdo_path() {
+        let path_a = Config::secrets_path(&PathBuf::from("/some/dir/config.toml"));
+        let path_b = Config::secrets_path(&PathBuf::from("/tmp/custom/my.toml"));
+        assert!(path_a.ends_with(".gurdo/secrets.toml"),
+            "expected path ending with .gurdo/secrets.toml, got {:?}", path_a);
+        assert_eq!(path_a, path_b, "secrets_path must be identical for any config_path input");
     }
 
     #[test]
@@ -374,7 +430,7 @@ username = "real_user"
 client_id = "real_client_id"
 "#).unwrap();
 
-        let config = Config::load(&cfg_path).unwrap();
+        let config = Config::load_with_secrets_at(&cfg_path, &sec_path).unwrap();
         assert_eq!(config.lastfm.api_key,    "real_api_key");
         assert_eq!(config.lastfm.username,   "real_user");
         assert_eq!(config.spotify.client_id, "real_client_id");
@@ -384,6 +440,7 @@ client_id = "real_client_id"
     fn load_uses_config_values_when_secrets_absent() {
         let dir = tempfile::tempdir().unwrap();
         let cfg_path = dir.path().join("config.toml");
+        let no_secrets = dir.path().join("nonexistent_secrets.toml");
 
         fs::write(&cfg_path, r#"
 [lastfm]
@@ -416,9 +473,104 @@ recommendation_pool_size = 200
 max_tracks_per_seed      = 20
 "#).unwrap();
 
-        let config = Config::load(&cfg_path).unwrap();
+        let config = Config::load_with_secrets_at(&cfg_path, &no_secrets).unwrap();
         assert_eq!(config.lastfm.api_key,    "direct_key");
         assert_eq!(config.lastfm.username,   "direct_user");
         assert_eq!(config.spotify.client_id, "direct_client");
+    }
+
+    // ── needs_setup ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn needs_setup_true_when_file_absent() {
+        assert!(needs_setup(std::path::Path::new("/nonexistent/path/secrets.toml")));
+    }
+
+    #[test]
+    fn needs_setup_false_when_all_keys_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secrets.toml");
+        fs::write(&p, "[lastfm]\napi_key = \"k\"\nusername = \"u\"\n[spotify]\nclient_id = \"c\"\n").unwrap();
+        assert!(!needs_setup(&p));
+    }
+
+    #[test]
+    fn needs_setup_true_when_api_key_whitespace() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secrets.toml");
+        fs::write(&p, "[lastfm]\napi_key = \"   \"\nusername = \"u\"\n[spotify]\nclient_id = \"c\"\n").unwrap();
+        assert!(needs_setup(&p));
+    }
+
+    #[test]
+    fn needs_setup_true_when_username_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secrets.toml");
+        fs::write(&p, "[lastfm]\napi_key = \"k\"\nusername = \"\"\n[spotify]\nclient_id = \"c\"\n").unwrap();
+        assert!(needs_setup(&p));
+    }
+
+    #[test]
+    fn needs_setup_true_when_client_id_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secrets.toml");
+        fs::write(&p, "[lastfm]\napi_key = \"k\"\nusername = \"u\"\n[spotify]\n").unwrap();
+        assert!(needs_setup(&p));
+    }
+
+    #[test]
+    fn needs_setup_true_when_file_unparseable() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secrets.toml");
+        fs::write(&p, "NOT VALID TOML {{{").unwrap();
+        assert!(needs_setup(&p));
+    }
+
+    // ── migrate_secrets_if_needed ───────────────────────────────────────────────
+
+    #[test]
+    fn migrate_copies_when_only_source_exists() {
+        let cwd_dir   = tempfile::tempdir().unwrap();
+        let gurdo_dir = tempfile::tempdir().unwrap();
+        fs::write(cwd_dir.path().join("secrets.toml"), "api_key = \"abc\"").unwrap();
+
+        migrate_secrets_if_needed(gurdo_dir.path(), cwd_dir.path()).unwrap();
+
+        let dest = gurdo_dir.path().join("secrets.toml");
+        assert!(dest.exists());
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "api_key = \"abc\"");
+    }
+
+    #[test]
+    fn migrate_noop_when_both_absent() {
+        let cwd_dir   = tempfile::tempdir().unwrap();
+        let gurdo_dir = tempfile::tempdir().unwrap();
+        migrate_secrets_if_needed(gurdo_dir.path(), cwd_dir.path()).unwrap();
+        assert!(!gurdo_dir.path().join("secrets.toml").exists());
+    }
+
+    #[test]
+    fn migrate_noop_when_dest_exists() {
+        let cwd_dir   = tempfile::tempdir().unwrap();
+        let gurdo_dir = tempfile::tempdir().unwrap();
+        fs::write(cwd_dir.path().join("secrets.toml"),   "api_key = \"old\"").unwrap();
+        fs::write(gurdo_dir.path().join("secrets.toml"), "api_key = \"existing\"").unwrap();
+
+        migrate_secrets_if_needed(gurdo_dir.path(), cwd_dir.path()).unwrap();
+
+        let content = fs::read_to_string(gurdo_dir.path().join("secrets.toml")).unwrap();
+        assert_eq!(content, "api_key = \"existing\"");
+    }
+
+    #[test]
+    fn migrate_noop_when_only_dest_exists() {
+        let cwd_dir   = tempfile::tempdir().unwrap();
+        let gurdo_dir = tempfile::tempdir().unwrap();
+        fs::write(gurdo_dir.path().join("secrets.toml"), "api_key = \"present\"").unwrap();
+
+        migrate_secrets_if_needed(gurdo_dir.path(), cwd_dir.path()).unwrap();
+
+        let content = fs::read_to_string(gurdo_dir.path().join("secrets.toml")).unwrap();
+        assert_eq!(content, "api_key = \"present\"");
     }
 }

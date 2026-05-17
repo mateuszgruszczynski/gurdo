@@ -7,7 +7,8 @@ mod spotify;
 mod sync;
 mod ui;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
@@ -22,13 +23,27 @@ fn main() -> Result<()> {
 
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    let gurdo_dir = config::gurdo_dir()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory; cannot locate ~/.gurdo/"))?;
+    std::fs::create_dir_all(&gurdo_dir)
+        .with_context(|| "Cannot create config directory ~/.gurdo/")?;
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    config::migrate_secrets_if_needed(&gurdo_dir, &cwd)?;
+
     let config_path = parse_config_arg();
+
+    let secrets_path = config::Config::secrets_path(&config_path);
+    if config::needs_setup(&secrets_path) {
+        ui::setup::run(&config_path)?;
+    }
+
     let config = config::Config::load(&config_path)?;
     std::fs::create_dir_all(config.data_dir())?;
     ui::run(config, config_path)
 }
 
-fn parse_config_arg() -> std::path::PathBuf {
+fn parse_config_arg() -> PathBuf {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "-c" || arg == "--config" {
@@ -37,16 +52,20 @@ fn parse_config_arg() -> std::path::PathBuf {
             }
         }
     }
-    "config.toml".into()
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".gurdo/config.toml")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn parse_config_arg_default() {
         let p = super::parse_config_arg();
-        assert_eq!(p.to_str().unwrap(), "config.toml");
+        assert!(
+            p.ends_with(".gurdo/config.toml"),
+            "expected path ending with .gurdo/config.toml, got {:?}",
+            p
+        );
     }
 }

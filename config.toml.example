@@ -1,8 +1,11 @@
-# Gurdo configuration example — copy to config.toml and fill in your values.
+# Gurdo configuration example.
 #
-# Sensitive values (api_key, username, client_id) can be kept in a separate
-# secrets.toml alongside this file so config.toml is safe to commit.
-# Example secrets.toml:
+# Default config location: ~/.gurdo/config.toml
+# On first launch the setup wizard creates this file automatically.
+# Copy this file there to customise before running, or edit after first launch.
+#
+# Credentials are stored separately in ~/.gurdo/secrets.toml (chmod 600)
+# and overlaid on top of this file at startup. Format:
 #
 #   [lastfm]
 #   api_key  = "your-lastfm-api-key"
