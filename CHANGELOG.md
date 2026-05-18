@@ -9,6 +9,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 - After completing Spotify OAuth during first-run setup, users are now prompted whether to fetch Last.fm data immediately or defer it. A "Skip for now" option closes setup and opens the app with an empty library; data can be fetched later from Settings.
+- Setup wizard screens: all content centred, heading text enlarged, username input narrowed to 260 px, error labels use a softer red.
+- Data fetch progress (setup Fetching phase and Settings "Update everything"): all four steps are now shown simultaneously as individual progress bars, with completed/active/pending visual states. Individual sync operations in Settings show a single progress bar.
+- Settings: Data section buttons, Save/Discard, and Close button are now horizontally centred. Sync error labels use the same softer red as setup.
 
 ---
 

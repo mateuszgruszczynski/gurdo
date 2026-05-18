@@ -8,7 +8,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::Config;
 use super::ops::token_exists;
-use super::state::{OperationCommand, OperationKind, OperationResult, OperationsState};
+use super::state::{OperationCommand, OperationKind, OperationsState};
 
 pub(super) fn render(
     ctx: &egui::Context,
@@ -44,51 +44,31 @@ pub(super) fn render(
             ui.add_space(4.0);
 
             ui.add_enabled_ui(!busy, |ui| {
-                if ui.button("Update everything").clicked() {
-                    let _ = ops_cmd_tx.send(OperationCommand::UpdateAll);
-                }
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Sync Last.fm").clicked() {
-                        let _ = ops_cmd_tx.send(OperationCommand::Run(OperationKind::SyncLastfm));
+                ui.vertical_centered(|ui| {
+                    if ui.button("Update everything").clicked() {
+                        let _ = ops_cmd_tx.send(OperationCommand::UpdateAll);
                     }
-                    if ui.button("Expand similar artists").clicked() {
-                        let _ = ops_cmd_tx.send(OperationCommand::Run(OperationKind::Expand));
-                    }
-                    if ui.button("Fetch top tracks").clicked() {
-                        let _ = ops_cmd_tx.send(OperationCommand::Run(OperationKind::FetchTracks));
-                    }
-                    if ui.button("Recalculate scores").clicked() {
-                        let _ = ops_cmd_tx.send(OperationCommand::Run(OperationKind::Score));
-                    }
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Sync Last.fm").clicked() {
+                            let _ = ops_cmd_tx.send(OperationCommand::Run(OperationKind::SyncLastfm));
+                        }
+                        if ui.button("Expand similar artists").clicked() {
+                            let _ = ops_cmd_tx.send(OperationCommand::Run(OperationKind::Expand));
+                        }
+                        if ui.button("Fetch top tracks").clicked() {
+                            let _ = ops_cmd_tx.send(OperationCommand::Run(OperationKind::FetchTracks));
+                        }
+                        if ui.button("Recalculate scores").clicked() {
+                            let _ = ops_cmd_tx.send(OperationCommand::Run(OperationKind::Score));
+                        }
+                    });
                 });
             });
 
-            if let Some(active) = &ops.active {
+            if ops.active.is_some() || ops.last_result.is_some() {
                 ui.add_space(4.0);
-                let step_prefix = active.step
-                    .map(|(n, t)| format!("Step {}/{}: ", n, t))
-                    .unwrap_or_default();
-                ui.label(format!("{}{}: {}", step_prefix, active.kind.label(), active.stage));
-                if let Some(total) = active.total {
-                    ui.label(format!("{}/{}", active.current, total));
-                } else if active.current > 0 {
-                    ui.label(format!("{}", active.current));
-                }
-            }
-
-            if ops.active.is_none() {
-                if let Some(result) = &ops.last_result {
-                    ui.add_space(4.0);
-                    match result {
-                        OperationResult::Ok(s) =>
-                            ui.label(egui::RichText::new(format!("✓ {}", s))
-                                .color(egui::Color32::from_rgb(100, 200, 100))),
-                        OperationResult::Failed(s) =>
-                            ui.label(egui::RichText::new(format!("✗ {}", s))
-                                .color(egui::Color32::RED)),
-                    };
-                }
+                render_ops_progress(ui, &ops);
             }
 
             ui.add_space(8.0);
@@ -268,27 +248,31 @@ pub(super) fn render(
             if dirty || any_changed {
                 ui.add_space(8.0);
                 ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(dirty || any_changed, egui::Button::new("• Save")).clicked() {
-                        let draft = display.clone();
-                        draft.save(config_path)
-                            .unwrap_or_else(|e| tracing::error!("Config save failed: {}", e));
-                        *shared_config.lock().unwrap() = draft;
-                        *settings_draft.lock().unwrap() = None;
-                    }
-                    if ui.button("Discard changes").clicked() {
-                        *settings_draft.lock().unwrap() = None;
-                    }
+                ui.vertical_centered(|ui| {
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(dirty || any_changed, egui::Button::new("• Save")).clicked() {
+                            let draft = display.clone();
+                            draft.save(config_path)
+                                .unwrap_or_else(|e| tracing::error!("Config save failed: {}", e));
+                            *shared_config.lock().unwrap() = draft;
+                            *settings_draft.lock().unwrap() = None;
+                        }
+                        if ui.button("Discard changes").clicked() {
+                            *settings_draft.lock().unwrap() = None;
+                        }
+                    });
                 });
             }
 
             ui.add_space(16.0);
             ui.separator();
             ui.add_space(8.0);
-            if ui.button("Close").clicked() {
-                settings_open.store(false, Ordering::Relaxed);
-                ctx.request_repaint_of(egui::ViewportId::ROOT);
-            }
+            ui.vertical_centered(|ui| {
+                if ui.button("Close").clicked() {
+                    settings_open.store(false, Ordering::Relaxed);
+                    ctx.request_repaint_of(egui::ViewportId::ROOT);
+                }
+            });
         });
     });
 
@@ -299,6 +283,107 @@ pub(super) fn render(
 
     if busy {
         ctx.request_repaint_after(Duration::from_millis(100));
+    }
+}
+
+// ── Progress helpers ──────────────────────────────────────────────────────────
+
+fn render_ops_progress(ui: &mut egui::Ui, ops: &super::state::OperationsState) {
+    use super::state::{OperationKind, OperationResult};
+
+    let is_update_all = ops.active.as_ref()
+        .and_then(|a| a.step)
+        .map(|(_, t)| t == 4)
+        .unwrap_or(false);
+
+    if is_update_all {
+        let steps = [
+            OperationKind::SyncLastfm,
+            OperationKind::Expand,
+            OperationKind::FetchTracks,
+            OperationKind::Score,
+        ];
+        let current_step = ops.active.as_ref()
+            .and_then(|a| a.step)
+            .map(|(n, _)| n as usize);
+
+        for (i, kind) in steps.iter().enumerate() {
+            let step_num = i + 1;
+
+            let is_done   = current_step.map(|n| step_num < n).unwrap_or(false);
+            let is_active = current_step == Some(step_num);
+            let is_pending = !is_done && !is_active;
+
+            let prefix = if is_done { "✓ " } else if is_active { "▶ " } else { "  " };
+            let label_text = format!("{}{}", prefix, kind.label());
+
+            if is_pending {
+                ui.label(egui::RichText::new(label_text).weak());
+            } else {
+                ui.label(&label_text);
+            }
+
+            let (frac, animate) = if is_done {
+                (1.0f32, false)
+            } else if is_active {
+                let known = ops.active.as_ref()
+                    .and_then(|a| a.total)
+                    .map(|t| ops.active.as_ref().unwrap().current as f32 / t as f32);
+                (known.unwrap_or(0.5), known.is_none())
+            } else {
+                (0.0f32, false)
+            };
+
+            ui.add(egui::ProgressBar::new(frac).animate(animate));
+
+            if is_active {
+                if let Some(active) = &ops.active {
+                    if !active.stage.is_empty() {
+                        ui.label(egui::RichText::new(&active.stage).weak().small());
+                    }
+                }
+            }
+
+            ui.add_space(2.0);
+        }
+
+        if ops.active.is_none() {
+            if let Some(result) = &ops.last_result {
+                match result {
+                    OperationResult::Ok(s) =>
+                        ui.label(egui::RichText::new(format!("✓ {}", s))
+                            .color(egui::Color32::from_rgb(100, 200, 100))),
+                    OperationResult::Failed(s) =>
+                        ui.label(egui::RichText::new(format!("✗ {}", s))
+                            .color(egui::Color32::from_rgb(220, 80, 80))),
+                };
+            }
+        }
+    } else {
+        // Single operation
+        if let Some(active) = &ops.active {
+            ui.label(format!("{}: {}", active.kind.label(), active.stage));
+            let (frac, animate) = active.total
+                .map(|t| (active.current as f32 / t as f32, false))
+                .unwrap_or((0.5, true));
+            ui.add(egui::ProgressBar::new(frac).animate(animate));
+            if let Some(total) = active.total {
+                ui.label(egui::RichText::new(format!("{}/{}", active.current, total)).weak().small());
+            }
+        }
+
+        if ops.active.is_none() {
+            if let Some(result) = &ops.last_result {
+                match result {
+                    OperationResult::Ok(s) =>
+                        ui.label(egui::RichText::new(format!("✓ {}", s))
+                            .color(egui::Color32::from_rgb(100, 200, 100))),
+                    OperationResult::Failed(s) =>
+                        ui.label(egui::RichText::new(format!("✗ {}", s))
+                            .color(egui::Color32::from_rgb(220, 80, 80))),
+                };
+            }
+        }
     }
 }
 

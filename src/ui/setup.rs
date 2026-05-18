@@ -148,23 +148,19 @@ impl SetupApp {
     }
 
     fn show_fields(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Welcome to Gurdo");
-        ui.add_space(8.0);
-        ui.label("Enter your Last.fm username to get started.");
-        ui.add_space(16.0);
-
-        ui.label("Last.fm Username");
-        ui.add(egui::TextEdit::singleline(&mut self.username).desired_width(f32::INFINITY));
-        ui.add_space(12.0);
-
-        if let Some(ref err) = self.write_error {
-            ui.colored_label(egui::Color32::RED, err);
+        ui.add_space(20.0);
+        ui.vertical_centered(|ui| {
+            ui.heading("Welcome to Gurdo");
             ui.add_space(8.0);
-        }
-
-        let all_filled = !self.username.trim().is_empty();
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label("Enter your Last.fm username to get started.");
+            ui.add_space(16.0);
+            ui.add_sized([260.0, 24.0], egui::TextEdit::singleline(&mut self.username));
+            ui.add_space(12.0);
+            if let Some(ref err) = self.write_error {
+                ui.colored_label(egui::Color32::from_rgb(220, 80, 80), err);
+                ui.add_space(8.0);
+            }
+            let all_filled = !self.username.trim().is_empty();
             ui.add_enabled_ui(all_filled, |ui| {
                 if ui.button("Continue").clicked() {
                     match write_credentials(&self.config_path, &self.username) {
@@ -178,23 +174,20 @@ impl SetupApp {
 
     fn show_oauth(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.add_space(20.0);
-        ui.heading("Connect Spotify");
-        ui.add_space(16.0);
-
-        let (status_text, color) = match &self.oauth_status {
-            OAuthStatus::Idle      => ("Connect your Spotify account to enable playback.".to_owned(), egui::Color32::GRAY),
-            OAuthStatus::Pending   => ("Waiting for Spotify authorisation\u{2026}".to_owned(), egui::Color32::GRAY),
-            OAuthStatus::Failed(e) => (format!("Error: {}", e), egui::Color32::RED),
-            OAuthStatus::Success   => ("Connected!".to_owned(), egui::Color32::GREEN),
-        };
-        ui.colored_label(color, &status_text);
-        ui.add_space(12.0);
-
-        let is_pending = self.oauth_status == OAuthStatus::Pending;
-        let connect_label = if matches!(self.oauth_status, OAuthStatus::Failed(_)) { "Retry" } else { "Connect Spotify" };
-
-        ui.add_enabled_ui(!is_pending, |ui| {
-            ui.vertical_centered(|ui| {
+        ui.vertical_centered(|ui| {
+            ui.heading("Connect Spotify");
+            ui.add_space(16.0);
+            let (status_text, color) = match &self.oauth_status {
+                OAuthStatus::Idle      => ("Connect your Spotify account to enable playback.".to_owned(), egui::Color32::GRAY),
+                OAuthStatus::Pending   => ("Waiting for Spotify authorisation\u{2026}".to_owned(), egui::Color32::GRAY),
+                OAuthStatus::Failed(e) => (format!("Error: {}", e), egui::Color32::from_rgb(220, 80, 80)),
+                OAuthStatus::Success   => ("Connected!".to_owned(), egui::Color32::GREEN),
+            };
+            ui.colored_label(color, &status_text);
+            ui.add_space(12.0);
+            let is_pending = self.oauth_status == OAuthStatus::Pending;
+            let connect_label = if matches!(self.oauth_status, OAuthStatus::Failed(_)) { "Retry" } else { "Connect Spotify" };
+            ui.add_enabled_ui(!is_pending, |ui| {
                 if ui.button(connect_label).clicked() {
                     self.start_oauth(ctx);
                 }
@@ -208,13 +201,13 @@ impl SetupApp {
 
     fn show_fetch_prompt(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.add_space(20.0);
-        ui.heading("Set up your music library");
-        ui.add_space(8.0);
-        ui.label("Gurdo can fetch your Last.fm listening history and Spotify library now. This takes a few minutes on the first run.");
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new("You can also do this later from Settings.").weak());
-        ui.add_space(16.0);
         ui.vertical_centered(|ui| {
+            ui.heading("Set up your music library");
+            ui.add_space(8.0);
+            ui.label("Gurdo can fetch your Last.fm listening history and Spotify library now. This takes a few minutes on the first run.");
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("You can also do this later from Settings.").weak());
+            ui.add_space(16.0);
             if ui.button("Fetch now").clicked() {
                 self.start_fetch(ctx);
             }
@@ -228,45 +221,21 @@ impl SetupApp {
 
     fn show_fetching(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.add_space(20.0);
-        ui.heading("Fetching your music data");
+        ui.vertical_centered(|ui| { ui.heading("Fetching your music data"); });
         ui.add_space(16.0);
-        ui.label("This may take a few minutes on the first run.");
-        ui.add_space(12.0);
 
         let ops = self.ops_state.lock().unwrap().clone();
-
-        if let Some(active) = &ops.active {
-            let step_prefix = active.step
-                .map(|(n, t)| format!("Step {}/{}: ", n, t))
-                .unwrap_or_default();
-            ui.label(format!("{}{}", step_prefix, active.kind.label()));
-            if !active.stage.is_empty() {
-                ui.label(egui::RichText::new(&active.stage).weak());
-            }
-            if let Some(total) = active.total {
-                ui.label(format!("{}/{}", active.current, total));
-            } else if active.current > 0 {
-                ui.label(format!("{}", active.current));
-            }
-        }
+        render_fetch_progress(ui, &ops);
 
         if ops.active.is_none() {
-            if let Some(result) = &ops.last_result {
-                match result {
-                    OperationResult::Ok(s) => {
-                        ui.colored_label(egui::Color32::from_rgb(100, 200, 100), format!("\u{2713} {}", s));
+            if let Some(OperationResult::Failed(_)) = &ops.last_result {
+                ui.add_space(8.0);
+                ui.vertical_centered(|ui| {
+                    if ui.button("Continue anyway").clicked() {
+                        *self.outcome.lock().unwrap() = SetupOutcome::Complete;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-                    OperationResult::Failed(s) => {
-                        ui.colored_label(egui::Color32::RED, format!("\u{2717} {}", s));
-                        ui.add_space(8.0);
-                        ui.vertical_centered(|ui| {
-                            if ui.button("Continue anyway").clicked() {
-                                *self.outcome.lock().unwrap() = SetupOutcome::Complete;
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                            }
-                        });
-                    }
-                }
+                });
             }
         }
     }
@@ -376,6 +345,89 @@ impl SetupApp {
             o.last_result = Some(OperationResult::Ok("Initial data fetch complete".to_string()));
             ctx_clone.request_repaint();
         });
+    }
+}
+
+// ── Fetch progress renderer ───────────────────────────────────────────────────
+
+fn parse_failed_step(msg: &str) -> Option<usize> {
+    msg.strip_prefix("Step ")
+        .and_then(|s| s.split('/').next())
+        .and_then(|n| n.parse().ok())
+}
+
+fn render_fetch_progress(ui: &mut egui::Ui, ops: &OperationsState) {
+    let steps = [
+        OperationKind::SyncLastfm,
+        OperationKind::Expand,
+        OperationKind::FetchTracks,
+        OperationKind::Score,
+    ];
+
+    let current_step = ops.active.as_ref()
+        .and_then(|a| a.step)
+        .map(|(n, _)| n as usize);
+
+    let failed_step: Option<usize> = match &ops.last_result {
+        Some(OperationResult::Failed(msg)) if ops.active.is_none() => parse_failed_step(msg),
+        _ => None,
+    };
+
+    let all_done = ops.active.is_none()
+        && matches!(&ops.last_result, Some(OperationResult::Ok(_)));
+
+    for (i, kind) in steps.iter().enumerate() {
+        let step_num = i + 1;
+
+        let is_done = failed_step.map(|f| step_num < f).unwrap_or(false)
+            || all_done
+            || current_step.map(|n| step_num < n).unwrap_or(false);
+        let is_failed  = failed_step == Some(step_num);
+        let is_active  = !is_done && !is_failed && current_step == Some(step_num);
+        let is_pending = !is_done && !is_active && !is_failed;
+
+        let prefix = if is_done { "✓ " } else if is_active { "▶ " } else if is_failed { "✗ " } else { "  " };
+        let label_text = format!("{}{}", prefix, kind.label());
+
+        if is_failed {
+            ui.colored_label(egui::Color32::from_rgb(220, 80, 80), &label_text);
+        } else if is_pending {
+            ui.label(egui::RichText::new(label_text).weak());
+        } else {
+            ui.label(&label_text);
+        }
+
+        let (bar_fraction, animate) = if is_done {
+            (1.0f32, false)
+        } else if is_active {
+            let known_frac = ops.active.as_ref()
+                .and_then(|a| a.total)
+                .map(|t| ops.active.as_ref().unwrap().current as f32 / t as f32);
+            (known_frac.unwrap_or(0.5), known_frac.is_none())
+        } else {
+            (0.0f32, false)
+        };
+
+        ui.add(egui::ProgressBar::new(bar_fraction).animate(animate));
+
+        if is_active {
+            if let Some(active) = &ops.active {
+                if !active.stage.is_empty() {
+                    ui.label(egui::RichText::new(&active.stage).weak().small());
+                }
+                if let Some(total) = active.total {
+                    ui.label(egui::RichText::new(format!("{}/{}", active.current, total)).weak().small());
+                }
+            }
+        }
+
+        if is_failed {
+            if let Some(OperationResult::Failed(msg)) = &ops.last_result {
+                ui.label(egui::RichText::new(msg).weak().small());
+            }
+        }
+
+        ui.add_space(4.0);
     }
 }
 
