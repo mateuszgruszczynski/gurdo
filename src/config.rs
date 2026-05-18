@@ -56,7 +56,7 @@ impl Default for SpotifyConfig {
 }
 
 fn default_redirect_uri() -> String {
-    "https://127.0.0.1:8888/callback".to_string()
+    "http://127.0.0.1:8888/callback".to_string()
 }
 fn default_callback_port() -> u16 { 8888 }
 
@@ -304,21 +304,6 @@ impl Config {
     pub fn token_path(&self) -> PathBuf {
         self.data_dir().join("spotify_token.json")
     }
-
-    /// DER-encoded certificate used for the OAuth HTTPS callback server.
-    pub fn cert_der_path(&self) -> PathBuf {
-        self.data_dir().join("localhost.crt")
-    }
-
-    /// DER-encoded private key for the callback server certificate.
-    pub fn key_der_path(&self) -> PathBuf {
-        self.data_dir().join("localhost.key")
-    }
-
-    /// PEM certificate — only used when trusting via the OS keychain.
-    pub fn cert_pem_path(&self) -> PathBuf {
-        self.data_dir().join("localhost.pem")
-    }
 }
 
 fn dirs_home() -> Option<PathBuf> {
@@ -360,7 +345,7 @@ mod tests {
 username = "PLACEHOLDER_USER"
 
 [spotify]
-redirect_uri = "https://127.0.0.1:8888/callback"
+redirect_uri = "http://127.0.0.1:8888/callback"
 callback_port = 8888
 
 [app]

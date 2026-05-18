@@ -1,24 +1,20 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
 use rand::Rng;
-use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair, SanType};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::{timeout, Duration};
-use tokio_rustls::TlsAcceptor;
 use tracing::info;
 
 use crate::config::Config;
 use super::models::{StoredToken, TokenResponse};
 
 // Register at https://developer.spotify.com — create an app, add
-// https://127.0.0.1:8888/callback as a redirect URI, paste the client ID here.
+// http://127.0.0.1:8888/callback as a redirect URI, paste the client ID here.
 const CLIENT_ID: &str = "b5e0f935d5b74b1cb7c2fc40a0e9b45e";
 
 const SPOTIFY_AUTH_URL: &str = "https://accounts.spotify.com/authorize";
@@ -45,41 +41,11 @@ fn generate_state() -> String {
     URL_SAFE_NO_PAD.encode(&bytes)
 }
 
-// ── Certificate ───────────────────────────────────────────────────────────────
-
-/// Generates a self-signed localhost certificate if one does not already exist.
-/// The cert is reused across sessions so the browser only prompts once per install.
-pub fn ensure_localhost_cert(config: &Config) -> Result<()> {
-    let cert_path = config.cert_der_path();
-    let key_path  = config.key_der_path();
-
-    if cert_path.exists() && key_path.exists() {
-        return Ok(());
-    }
-
-    info!("Generating localhost certificate for OAuth callback...");
-
-    let mut params = CertificateParams::new(vec!["localhost".to_string()])?;
-    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    params.subject_alt_names.push(SanType::IpAddress(
-        std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
-    ));
-    let key_pair = KeyPair::generate()?;
-    let cert     = params.self_signed(&key_pair)?;
-
-    std::fs::write(&cert_path, cert.der())?;
-    std::fs::write(&key_path,  key_pair.serialize_der())?;
-
-    Ok(())
-}
-
 // ── OAuth flow ────────────────────────────────────────────────────────────────
 
 pub async fn run_oauth_flow(config: &Config) -> Result<()> {
     let redirect_uri = &config.spotify.redirect_uri;
     let port         = config.spotify.callback_port;
-
-    ensure_localhost_cert(config)?;
 
     let verifier  = generate_code_verifier();
     let challenge = generate_code_challenge(&verifier);
@@ -100,7 +66,7 @@ pub async fn run_oauth_flow(config: &Config) -> Result<()> {
     }
 
     info!("Waiting for Spotify OAuth callback on port {}...", port);
-    let code = wait_for_callback(config, port, &state).await?;
+    let code = wait_for_callback(port, &state).await?;
 
     info!("Exchanging auth code for tokens...");
     let token = exchange_code(CLIENT_ID, &code, &verifier, redirect_uri).await?;
@@ -110,33 +76,18 @@ pub async fn run_oauth_flow(config: &Config) -> Result<()> {
     Ok(())
 }
 
-// ── HTTPS callback server ─────────────────────────────────────────────────────
+// ── HTTP callback server ──────────────────────────────────────────────────────
 
-async fn wait_for_callback(config: &Config, port: u16, expected_state: &str) -> Result<String> {
-    let cert_der = std::fs::read(config.cert_der_path())
-        .context("Certificate not found — this is a bug, ensure_localhost_cert should have run first")?;
-    let key_der = std::fs::read(config.key_der_path())
-        .context("Private key not found — this is a bug, ensure_localhost_cert should have run first")?;
-
-    let tls_config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![CertificateDer::from(cert_der)],
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der)),
-        )?;
-    let acceptor = TlsAcceptor::from(Arc::new(tls_config));
-
+async fn wait_for_callback(port: u16, expected_state: &str) -> Result<String> {
     let addr: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
     let listener = TcpListener::bind(addr).await
         .with_context(|| format!("Cannot bind to port {}", port))?;
 
     let result = timeout(Duration::from_secs(300), async {
-        let (stream, _) = listener.accept().await?;
-        let mut tls = acceptor.accept(stream).await
-            .context("TLS handshake failed — in your browser click Advanced → Proceed to 127.0.0.1")?;
+        let (mut stream, _) = listener.accept().await?;
 
         let mut buf = vec![0u8; 8192];
-        let n = tls.read(&mut buf).await?;
+        let n = stream.read(&mut buf).await?;
         let request = String::from_utf8_lossy(&buf[..n]);
 
         let path = request.lines().next().unwrap_or("")
@@ -155,8 +106,7 @@ height:100vh;margin:0;background:#191414}h1{color:#1db954}p{color:#fff}</style><
             "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             html.len(), html
         );
-        tls.write_all(response.as_bytes()).await?;
-        let _ = tls.shutdown().await;
+        stream.write_all(response.as_bytes()).await?;
 
         Ok::<(String, String), anyhow::Error>((code, state))
     })

@@ -21,8 +21,6 @@ fn main() -> Result<()> {
         .without_time()
         .init();
 
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
     let gurdo_dir = config::gurdo_dir()
         .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory; cannot locate ~/.gurdo/"))?;
     std::fs::create_dir_all(&gurdo_dir)

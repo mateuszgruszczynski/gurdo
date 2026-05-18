@@ -181,13 +181,6 @@ impl SetupApp {
             OAuthStatus::Success   => ("Connected!".to_owned(), egui::Color32::GREEN),
         };
         ui.colored_label(color, &status_text);
-        ui.add_space(8.0);
-        ui.label(
-            egui::RichText::new(
-                "If your browser shows a certificate warning for 127.0.0.1,\n\
-                 click \u{201c}Advanced\u{201d} \u{2192} \u{201c}Proceed to 127.0.0.1\u{201d} to continue."
-            ).weak().small()
-        );
         ui.add_space(12.0);
 
         let is_pending = self.oauth_status == OAuthStatus::Pending;
