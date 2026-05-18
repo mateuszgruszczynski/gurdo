@@ -7,6 +7,9 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::progress::ProgressReporter;
+use super::state::{ActiveOperation, OperationKind, OperationResult, OperationsState};
+
 const DEFAULT_CONFIG_TOML: &str = r#"[app]
 data_dir = "~/.gurdo"
 
@@ -29,7 +32,7 @@ max_tracks_per_seed      = 20
 "#;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Phase { Fields, OAuth }
+enum Phase { Fields, OAuth, Fetching }
 
 #[derive(Debug, Clone, PartialEq)]
 enum OAuthStatus { Idle, Pending, Success, Failed(String) }
@@ -44,8 +47,43 @@ struct SetupApp {
     write_error: Option<String>,
     oauth_status: OAuthStatus,
     oauth_result: Arc<Mutex<Option<std::result::Result<(), String>>>>,
+    ops_state: Arc<Mutex<OperationsState>>,
     outcome: Arc<Mutex<SetupOutcome>>,
 }
+
+// ── Reporter for the fetch thread ─────────────────────────────────────────────
+
+struct SetupReporter {
+    ops: Arc<Mutex<OperationsState>>,
+    ctx: egui::Context,
+}
+
+impl ProgressReporter for SetupReporter {
+    fn stage(&self, name: &str) {
+        if let Some(a) = &mut self.ops.lock().unwrap().active {
+            a.stage   = name.to_string();
+            a.current = 0;
+            a.total   = None;
+        }
+        self.ctx.request_repaint();
+    }
+    fn tick(&self, current: u64, total: Option<u64>) {
+        if let Some(a) = &mut self.ops.lock().unwrap().active {
+            a.current = current;
+            a.total   = total;
+        }
+        self.ctx.request_repaint();
+    }
+    fn message(&self, msg: &str) {
+        if let Some(a) = &mut self.ops.lock().unwrap().active {
+            a.message = msg.to_string();
+        }
+        self.ctx.request_repaint();
+    }
+    fn finish(&self, _ok: bool, _summary: &str) {}
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
 
 impl eframe::App for SetupApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -53,8 +91,9 @@ impl eframe::App for SetupApp {
             let mut outcome = self.outcome.lock().unwrap();
             if *outcome == SetupOutcome::InProgress {
                 *outcome = match self.phase {
-                    Phase::Fields => SetupOutcome::CancelledPhase1,
-                    Phase::OAuth  => SetupOutcome::CancelledOAuth,
+                    Phase::Fields   => SetupOutcome::CancelledPhase1,
+                    Phase::OAuth    => SetupOutcome::CancelledOAuth,
+                    Phase::Fetching => SetupOutcome::Complete,
                 };
             }
             return;
@@ -73,15 +112,28 @@ impl eframe::App for SetupApp {
         }
 
         if self.oauth_status == OAuthStatus::Success {
-            *self.outcome.lock().unwrap() = SetupOutcome::Complete;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            return;
+            self.start_fetch(ctx);
+        }
+
+        // Auto-close when fetch sequence finishes
+        if self.phase == Phase::Fetching {
+            let ops = self.ops_state.lock().unwrap();
+            if ops.active.is_none() {
+                if let Some(OperationResult::Ok(_)) = &ops.last_result {
+                    drop(ops);
+                    *self.outcome.lock().unwrap() = SetupOutcome::Complete;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+            }
+            ctx.request_repaint();
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.phase {
-                Phase::Fields => self.show_fields(ui),
-                Phase::OAuth  => self.show_oauth(ui, ctx),
+                Phase::Fields   => self.show_fields(ui),
+                Phase::OAuth    => self.show_oauth(ui, ctx),
+                Phase::Fetching => self.show_fetching(ui, ctx),
             }
         });
     }
@@ -148,11 +200,55 @@ impl SetupApp {
                 }
                 ui.add_space(8.0);
                 if ui.button("Skip for now").clicked() {
-                    *self.outcome.lock().unwrap() = SetupOutcome::Complete;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    self.start_fetch(ctx);
                 }
             });
         });
+    }
+
+    fn show_fetching(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.add_space(20.0);
+        ui.heading("Fetching your music data");
+        ui.add_space(16.0);
+        ui.label("This may take a few minutes on the first run.");
+        ui.add_space(12.0);
+
+        let ops = self.ops_state.lock().unwrap().clone();
+
+        if let Some(active) = &ops.active {
+            let step_prefix = active.step
+                .map(|(n, t)| format!("Step {}/{}: ", n, t))
+                .unwrap_or_default();
+            ui.label(format!("{}{}", step_prefix, active.kind.label()));
+            if !active.stage.is_empty() {
+                ui.label(egui::RichText::new(&active.stage).weak());
+            }
+            if let Some(total) = active.total {
+                ui.label(format!("{}/{}", active.current, total));
+            } else if active.current > 0 {
+                ui.label(format!("{}", active.current));
+            }
+        }
+
+        if ops.active.is_none() {
+            if let Some(result) = &ops.last_result {
+                match result {
+                    OperationResult::Ok(s) => {
+                        ui.colored_label(egui::Color32::from_rgb(100, 200, 100), format!("\u{2713} {}", s));
+                    }
+                    OperationResult::Failed(s) => {
+                        ui.colored_label(egui::Color32::RED, format!("\u{2717} {}", s));
+                        ui.add_space(8.0);
+                        ui.vertical_centered(|ui| {
+                            if ui.button("Continue anyway").clicked() {
+                                *self.outcome.lock().unwrap() = SetupOutcome::Complete;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        });
+                    }
+                }
+            }
+        }
     }
 
     fn start_oauth(&mut self, ctx: &egui::Context) {
@@ -180,6 +276,84 @@ impl SetupApp {
                 .expect("tokio runtime for OAuth");
             let result = rt.block_on(crate::spotify::auth::run_oauth_flow(&config));
             *result_arc.lock().unwrap() = Some(result.map_err(|e| e.to_string()));
+            ctx_clone.request_repaint();
+        });
+    }
+
+    fn start_fetch(&mut self, ctx: &egui::Context) {
+        if self.phase == Phase::Fetching {
+            return;
+        }
+        self.phase = Phase::Fetching;
+        self.oauth_status = OAuthStatus::Idle;
+
+        let ops_arc   = Arc::clone(&self.ops_state);
+        let ctx_clone = ctx.clone();
+        let gurdo_cfg = crate::config::gurdo_dir()
+            .map(|d| d.join("config.toml"))
+            .unwrap_or_else(|| self.config_path.clone());
+
+        std::thread::spawn(move || {
+            let config = match crate::config::Config::load(&gurdo_cfg) {
+                Ok(c)  => c,
+                Err(e) => {
+                    ops_arc.lock().unwrap().last_result =
+                        Some(OperationResult::Failed(e.to_string()));
+                    ctx_clone.request_repaint();
+                    return;
+                }
+            };
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime for fetch");
+
+            let steps = [
+                OperationKind::SyncLastfm,
+                OperationKind::Expand,
+                OperationKind::FetchTracks,
+                OperationKind::Score,
+            ];
+            let total = steps.len() as u8;
+
+            for (i, kind) in steps.iter().enumerate() {
+                {
+                    let mut o = ops_arc.lock().unwrap();
+                    o.active = Some(ActiveOperation {
+                        kind:    kind.clone(),
+                        step:    Some((i as u8 + 1, total)),
+                        stage:   String::new(),
+                        current: 0,
+                        total:   None,
+                        message: String::new(),
+                    });
+                }
+                ctx_clone.request_repaint();
+
+                let reporter = SetupReporter {
+                    ops: Arc::clone(&ops_arc),
+                    ctx: ctx_clone.clone(),
+                };
+
+                let result = rt.block_on(
+                    crate::ui::ops::run_operation_pub(kind.clone(), &config, &reporter)
+                );
+
+                if let Err(e) = result {
+                    let mut o = ops_arc.lock().unwrap();
+                    o.active      = None;
+                    o.last_result = Some(OperationResult::Failed(
+                        format!("Step {}/{} ({}) failed: {}", i + 1, total, kind.label(), e)
+                    ));
+                    ctx_clone.request_repaint();
+                    return;
+                }
+            }
+
+            let mut o = ops_arc.lock().unwrap();
+            o.active      = None;
+            o.last_result = Some(OperationResult::Ok("Initial data fetch complete".to_string()));
             ctx_clone.request_repaint();
         });
     }
@@ -256,6 +430,10 @@ pub fn run(config_path: &Path) -> Result<()> {
                 write_error: None,
                 oauth_status: OAuthStatus::Idle,
                 oauth_result: Arc::new(Mutex::new(None)),
+                ops_state: Arc::new(Mutex::new(OperationsState {
+                    active: None,
+                    last_result: None,
+                })),
                 outcome: outcome_clone,
             }))
         }),

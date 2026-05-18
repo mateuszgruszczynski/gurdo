@@ -48,6 +48,14 @@ pub fn token_exists(config: &Config) -> bool {
 
 // ── Operation dispatch ────────────────────────────────────────────────────────
 
+pub(crate) async fn run_operation_pub(
+    kind: OperationKind,
+    config: &Config,
+    progress: &dyn ProgressReporter,
+) -> anyhow::Result<String> {
+    run_operation(kind, config, progress).await
+}
+
 async fn run_operation(
     kind: OperationKind,
     config: &Config,
