@@ -5,6 +5,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+- After completing Spotify OAuth during first-run setup, users are now prompted whether to fetch Last.fm data immediately or defer it. A "Skip for now" option closes setup and opens the app with an empty library; data can be fetched later from Settings.
+
+---
+
 ## [Iteration 017] — First-run setup screen + user-scoped config/secrets — 2026-05-17
 
 ### Added

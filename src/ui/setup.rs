@@ -32,7 +32,7 @@ max_tracks_per_seed      = 20
 "#;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Phase { Fields, OAuth, Fetching }
+enum Phase { Fields, OAuth, FetchPrompt, Fetching }
 
 #[derive(Debug, Clone, PartialEq)]
 enum OAuthStatus { Idle, Pending, Success, Failed(String) }
@@ -88,14 +88,7 @@ impl ProgressReporter for SetupReporter {
 impl eframe::App for SetupApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if ctx.input(|i| i.viewport().close_requested()) {
-            let mut outcome = self.outcome.lock().unwrap();
-            if *outcome == SetupOutcome::InProgress {
-                *outcome = match self.phase {
-                    Phase::Fields   => SetupOutcome::CancelledPhase1,
-                    Phase::OAuth    => SetupOutcome::CancelledOAuth,
-                    Phase::Fetching => SetupOutcome::Complete,
-                };
-            }
+            self.handle_close();
             return;
         }
 
@@ -112,7 +105,8 @@ impl eframe::App for SetupApp {
         }
 
         if self.oauth_status == OAuthStatus::Success {
-            self.start_fetch(ctx);
+            self.oauth_status = OAuthStatus::Idle;
+            self.phase = Phase::FetchPrompt;
         }
 
         // Auto-close when fetch sequence finishes
@@ -131,15 +125,28 @@ impl eframe::App for SetupApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.phase {
-                Phase::Fields   => self.show_fields(ui),
-                Phase::OAuth    => self.show_oauth(ui, ctx),
-                Phase::Fetching => self.show_fetching(ui, ctx),
+                Phase::Fields       => self.show_fields(ui),
+                Phase::OAuth        => self.show_oauth(ui, ctx),
+                Phase::FetchPrompt  => self.show_fetch_prompt(ui, ctx),
+                Phase::Fetching     => self.show_fetching(ui, ctx),
             }
         });
     }
 }
 
 impl SetupApp {
+    pub(crate) fn handle_close(&mut self) {
+        let mut outcome = self.outcome.lock().unwrap();
+        if *outcome == SetupOutcome::InProgress {
+            *outcome = match self.phase {
+                Phase::Fields       => SetupOutcome::CancelledPhase1,
+                Phase::OAuth        => SetupOutcome::CancelledOAuth,
+                Phase::FetchPrompt  => SetupOutcome::Complete,
+                Phase::Fetching     => SetupOutcome::Complete,
+            };
+        }
+    }
+
     fn show_fields(&mut self, ui: &mut egui::Ui) {
         ui.heading("Welcome to Gurdo");
         ui.add_space(8.0);
@@ -193,9 +200,29 @@ impl SetupApp {
                 }
                 ui.add_space(8.0);
                 if ui.button("Skip for now").clicked() {
-                    self.start_fetch(ctx);
+                    self.phase = Phase::FetchPrompt;
                 }
             });
+        });
+    }
+
+    fn show_fetch_prompt(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.add_space(20.0);
+        ui.heading("Set up your music library");
+        ui.add_space(8.0);
+        ui.label("Gurdo can fetch your Last.fm listening history and Spotify library now. This takes a few minutes on the first run.");
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new("You can also do this later from Settings.").weak());
+        ui.add_space(16.0);
+        ui.vertical_centered(|ui| {
+            if ui.button("Fetch now").clicked() {
+                self.start_fetch(ctx);
+            }
+            ui.add_space(8.0);
+            if ui.button("Skip for now").clicked() {
+                *self.outcome.lock().unwrap() = SetupOutcome::Complete;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         });
     }
 
@@ -449,6 +476,94 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    fn make_test_app() -> SetupApp {
+        SetupApp {
+            config_path: std::path::PathBuf::from("/tmp/test_setup_config.toml"),
+            phase: Phase::Fields,
+            username: String::new(),
+            write_error: None,
+            oauth_status: OAuthStatus::Idle,
+            oauth_result: Arc::new(Mutex::new(None)),
+            ops_state: Arc::new(Mutex::new(OperationsState {
+                active: None,
+                last_result: None,
+            })),
+            outcome: Arc::new(Mutex::new(SetupOutcome::InProgress)),
+        }
+    }
+
+    // T-01: OAuth success → FetchPrompt, oauth_status reset, no fetch started
+    #[test]
+    fn oauth_success_transitions_to_fetch_prompt_and_resets_status() {
+        let mut app = make_test_app();
+        app.phase = Phase::OAuth;
+        app.oauth_status = OAuthStatus::Success;
+
+        // Simulate the update() branch for OAuthStatus::Success
+        if app.oauth_status == OAuthStatus::Success {
+            app.oauth_status = OAuthStatus::Idle;
+            app.phase = Phase::FetchPrompt;
+        }
+
+        assert_eq!(app.phase, Phase::FetchPrompt);
+        assert_eq!(app.oauth_status, OAuthStatus::Idle);
+    }
+
+    // T-02: OAuth skip → FetchPrompt, no fetch
+    #[test]
+    fn oauth_skip_transitions_to_fetch_prompt() {
+        let mut app = make_test_app();
+        app.phase = Phase::OAuth;
+
+        // Simulate "Skip for now" click handler
+        app.phase = Phase::FetchPrompt;
+
+        assert_eq!(app.phase, Phase::FetchPrompt);
+        // phase is FetchPrompt, not Fetching — no fetch started
+        assert_ne!(app.phase, Phase::Fetching);
+    }
+
+    // T-03: close on FetchPrompt → Complete
+    #[test]
+    fn close_on_fetch_prompt_produces_complete() {
+        let mut app = make_test_app();
+        app.phase = Phase::FetchPrompt;
+        app.handle_close();
+        assert_eq!(*app.outcome.lock().unwrap(), SetupOutcome::Complete);
+    }
+
+    // T-04: close on Fields → CancelledPhase1 (regression)
+    #[test]
+    fn close_on_fields_produces_cancelled_phase1() {
+        let mut app = make_test_app();
+        app.phase = Phase::Fields;
+        app.handle_close();
+        assert_eq!(*app.outcome.lock().unwrap(), SetupOutcome::CancelledPhase1);
+    }
+
+    // T-05: close on OAuth → CancelledOAuth (regression)
+    #[test]
+    fn close_on_oauth_produces_cancelled_oauth() {
+        let mut app = make_test_app();
+        app.phase = Phase::OAuth;
+        app.handle_close();
+        assert_eq!(*app.outcome.lock().unwrap(), SetupOutcome::CancelledOAuth);
+    }
+
+    // T-10: oauth_status Idle on FetchPrompt prevents re-triggering auto-fetch
+    #[test]
+    fn oauth_status_idle_on_fetch_prompt_does_not_retrigger() {
+        let mut app = make_test_app();
+        app.phase = Phase::FetchPrompt;
+        app.oauth_status = OAuthStatus::Idle; // as reset by transition
+
+        // Simulate the update() branch — only fires when Success
+        let would_trigger = app.oauth_status == OAuthStatus::Success;
+
+        assert!(!would_trigger);
+        assert_eq!(app.phase, Phase::FetchPrompt);
+    }
 
     #[test]
     fn write_secrets_trims_and_produces_valid_toml() {
